@@ -1,5 +1,7 @@
 # rust shell
 
+![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)
+
 ## Description
 
 This is a console written in Rust. It can execute simple commands, redirect input and output streams, execute a pipeline
