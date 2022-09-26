@@ -1,4 +1,4 @@
-use std::{ffi::CString};
+use std::ffi::CString;
 
 use core::time;
 
@@ -10,9 +10,7 @@ use nix::{
     errno::Errno,
     fcntl::{fcntl, FcntlArg, OFlag},
     libc::{STDIN_FILENO, STDOUT_FILENO},
-    sys::{
-        wait::{waitpid, WaitStatus},
-    },
+    sys::wait::{waitpid, WaitStatus},
     unistd::{close, dup2, fork, pipe, read, write, ForkResult},
 };
 
@@ -20,18 +18,21 @@ use rust_shell::{main, parse, Command};
 
 #[test]
 fn test_simple_parse() {
-    assert_eq!(parse(">foo bar < zog | wc -l"), vec!(
-        Command {
-            command: vec!(CString::new("bar").unwrap()),
-            stdout: Some(CString::new("foo").unwrap()),
-            stdin: Some(CString::new("zog").unwrap()),
-        },
-        Command {
-            command: vec!(CString::new("wc").unwrap(), CString::new("-l").unwrap()),
-            stdin: None,
-            stdout: None,
-        },
-    ));
+    assert_eq!(
+        parse(">foo bar < zog | wc -l"),
+        vec!(
+            Command {
+                command: vec!(CString::new("bar").unwrap()),
+                stdout: Some(CString::new("foo").unwrap()),
+                stdin: Some(CString::new("zog").unwrap()),
+            },
+            Command {
+                command: vec!(CString::new("wc").unwrap(), CString::new("-l").unwrap()),
+                stdin: None,
+                stdout: None,
+            },
+        )
+    );
 }
 
 static SHELL_LOCK: Mutex<()> = Mutex::new(());
@@ -61,7 +62,7 @@ where
 
             main().unwrap();
             exit(0);
-        },
+        }
     };
 
     let mut send = |s: String| {
@@ -102,5 +103,22 @@ fn test_simple_shell() {
 
         send("ls /tmp/foo\n".to_string());
         assert_eq!(recv(), "/tmp/foo\n".to_string());
+    })
+}
+
+#[test]
+fn test_file_shell() {
+    run_shell(|send, recv| {
+        send("echo hello > /tmp/bar\n".to_string());
+        assert_eq!(recv(), "".to_string());
+
+        send("cat /tmp/bar\n".to_string());
+        assert_eq!(recv(), "hello\n".to_string());
+
+        send("wc -c < /tmp/bar > /tmp/zog\n".to_string());
+        assert_eq!(recv(), "".to_string());
+
+        send("cat /tmp/zog\n".to_string());
+        assert_eq!(recv(), "6\n".to_string());
     })
 }

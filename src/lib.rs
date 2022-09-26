@@ -5,8 +5,10 @@
 use std::{error::Error, ffi::CString, io, io::prelude::*, str};
 
 use nix::{
-    sys::{wait::waitpid},
-    unistd::{execvp, fork, ForkResult},
+    fcntl::{open, OFlag},
+    libc::{O_WRONLY, STDIN_FILENO, STDOUT_FILENO},
+    sys::{stat::Mode, wait::waitpid},
+    unistd::{close, dup2, execvp, fork, ForkResult},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -65,7 +67,9 @@ pub fn parse(line: &str) -> Vec<Command> {
                 stdout: None,
             };
         } else {
-            command.command.push(CString::new(words[i].clone()).unwrap());
+            command
+                .command
+                .push(CString::new(words[i].clone()).unwrap());
         }
         i += 1;
     }
@@ -74,9 +78,7 @@ pub fn parse(line: &str) -> Vec<Command> {
 }
 
 pub fn executeCommands(commands: &Vec<Command>) {
-    let forkResult : ForkResult = unsafe {
-        fork().unwrap()
-    };
+    let forkResult: ForkResult = unsafe { fork().unwrap() };
 
     match forkResult {
         ForkResult::Child => {
@@ -84,14 +86,31 @@ pub fn executeCommands(commands: &Vec<Command>) {
             for i in 0..commands[0].command.len() {
                 args.push(CString::new(commands[0].command[i].clone()).unwrap());
             }
+            if commands[0].stdin != None {
+                close(0).unwrap();
+                let fdin = open(
+                    commands[0].stdin.clone().unwrap().to_str().unwrap(),
+                    OFlag::O_CREAT | OFlag::O_WRONLY,
+                    Mode::from_bits_truncate(0o777),
+                )
+                .unwrap();
+            }
+            if commands[0].stdout != None {
+                close(1).unwrap();
+                let fdout = open(
+                    commands[0].stdout.clone().unwrap().to_str().unwrap(),
+                    OFlag::O_CREAT | OFlag::O_WRONLY,
+                    Mode::from_bits_truncate(0o777),
+                )
+                .unwrap();
+            }
             execvp(&commands[0].command[0], args.as_slice()).unwrap();
-        },
+        }
         ForkResult::Parent { child } => {
             waitpid(child, None).unwrap();
-        },
+        }
     }
 }
-
 
 pub fn main() -> Result<(), Box<dyn Error>> {
     for line in io::stdin().lock().lines() {
