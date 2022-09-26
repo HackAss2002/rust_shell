@@ -8,7 +8,7 @@ use nix::{
     fcntl::{open, OFlag},
     libc::{O_WRONLY, STDIN_FILENO, STDOUT_FILENO},
     sys::{stat::Mode, wait::waitpid},
-    unistd::{close, dup2, execvp, fork, ForkResult},
+    unistd::{close, dup2, execvp, fork, pipe, ForkResult},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -78,36 +78,97 @@ pub fn parse(line: &str) -> Vec<Command> {
 }
 
 pub fn executeCommands(commands: &Vec<Command>) {
-    let forkResult: ForkResult = unsafe { fork().unwrap() };
+    let mut pipeline = Vec::<(Option<i32>, Option<i32>)>::with_capacity(commands.len());
+    for i in 0..commands.len() {
+        pipeline.push((None, None));
+    }
+    for i in 0..commands.len() - 1 {
+        let (inpipe, outpipe) = pipe().unwrap();
+        pipeline[i].1 = Option::Some(outpipe);
+        pipeline[i + 1].0 = Option::Some(inpipe);
+    }
 
-    match forkResult {
-        ForkResult::Child => {
-            let mut args: Vec<CString> = Vec::<CString>::new();
-            for i in 0..commands[0].command.len() {
-                args.push(CString::new(commands[0].command[i].clone()).unwrap());
+    if commands.first().unwrap().stdin != None {
+        pipeline.first_mut().unwrap().0 = Option::Some(
+            open(
+                commands
+                    .first()
+                    .unwrap()
+                    .stdin
+                    .clone()
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                OFlag::O_CREAT | OFlag::O_WRONLY,
+                Mode::from_bits_truncate(0o777),
+            )
+            .unwrap(),
+        );
+    }
+    if commands.last().unwrap().stdout != None {
+        pipeline.last_mut().unwrap().1 = Option::Some(
+            open(
+                commands
+                    .last()
+                    .unwrap()
+                    .stdout
+                    .clone()
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                OFlag::O_CREAT | OFlag::O_WRONLY,
+                Mode::from_bits_truncate(0o777),
+            )
+            .unwrap(),
+        );
+    }
+
+    let mut forks = Vec::<ForkResult>::with_capacity(commands.len());
+    for i in 0..commands.len() {
+        if forks.len() == 0 || forks.last().unwrap().is_parent() {
+            forks.push(unsafe { fork().unwrap() });
+            match forks[i] {
+                ForkResult::Child => {
+                    let mut args: Vec<CString> = Vec::<CString>::new();
+                    for j in 0..commands[i].command.len() {
+                        args.push(CString::new(commands[i].command[j].clone()).unwrap());
+                    }
+                    if pipeline[i].0 != None {
+                        dup2(pipeline[i].0.unwrap(), 0).unwrap();
+                    }
+                    if pipeline[i].1 != None {
+                        dup2(pipeline[i].1.unwrap(), 1).unwrap();
+                    }
+                    for j in 0..pipeline.len() {
+                        if pipeline[j].0 != None {
+                            close(pipeline[j].0.unwrap()).unwrap();
+                        }
+                        if pipeline[j].1 != None {
+                            close(pipeline[j].1.unwrap()).unwrap();
+                        }
+                    }
+                    execvp(&args[0], args.as_slice()).unwrap();
+                    break;
+                }
+                ForkResult::Parent { child } => {}
             }
-            if commands[0].stdin != None {
-                close(0).unwrap();
-                let fdin = open(
-                    commands[0].stdin.clone().unwrap().to_str().unwrap(),
-                    OFlag::O_CREAT | OFlag::O_WRONLY,
-                    Mode::from_bits_truncate(0o777),
-                )
-                .unwrap();
-            }
-            if commands[0].stdout != None {
-                close(1).unwrap();
-                let fdout = open(
-                    commands[0].stdout.clone().unwrap().to_str().unwrap(),
-                    OFlag::O_CREAT | OFlag::O_WRONLY,
-                    Mode::from_bits_truncate(0o777),
-                )
-                .unwrap();
-            }
-            execvp(&commands[0].command[0], args.as_slice()).unwrap();
         }
-        ForkResult::Parent { child } => {
-            waitpid(child, None).unwrap();
+    }
+    for j in 0..pipeline.len() {
+        if pipeline[j].0 != None {
+            close(pipeline[j].0.unwrap()).unwrap();
+        }
+        if pipeline[j].1 != None {
+            close(pipeline[j].1.unwrap()).unwrap();
+        }
+    }
+
+    for i in 0..forks.len() {
+        match forks[i] {
+            ForkResult::Child => {}
+            ForkResult::Parent { child } => {
+                waitpid(child, None).unwrap();
+            }
         }
     }
 }
