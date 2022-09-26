@@ -1,4 +1,4 @@
-use std::ffi::CString;
+use std::{error::Error, ffi::CString, io, io::prelude::*, str};
 
 use core::time;
 
@@ -8,10 +8,13 @@ use std::sync::Mutex;
 
 use nix::{
     errno::Errno,
-    fcntl::{fcntl, FcntlArg, OFlag},
+    fcntl::{fcntl, open, FcntlArg, OFlag},
     libc::{STDIN_FILENO, STDOUT_FILENO},
-    sys::wait::{waitpid, WaitStatus},
-    unistd::{close, dup2, fork, pipe, read, write, ForkResult},
+    sys::{
+        stat::Mode,
+        wait::{waitpid, WaitStatus},
+    },
+    unistd::{close, dup2, execvp, fork, pipe, read, write, ForkResult},
 };
 
 use rust_shell::{main, parse, Command};
@@ -120,5 +123,19 @@ fn test_file_shell() {
 
         send("cat /tmp/zog\n".to_string());
         assert_eq!(recv(), "6\n".to_string());
+    })
+}
+
+#[test]
+fn test_pipe_shell() {
+    run_shell(|send, recv| {
+        send("echo foo | wc -l | wc -c\n".to_string());
+        assert_eq!(recv(), "2\n".to_string());
+
+        send("echo hello | cat > /tmp/cat\n".to_string());
+        assert_eq!(recv(), "".to_string());
+
+        send("cat /tmp/cat\n".to_string());
+        assert_eq!(recv(), "hello\n".to_string());
     })
 }
