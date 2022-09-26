@@ -4,6 +4,11 @@
 
 use std::{error::Error, ffi::CString, io, io::prelude::*, str};
 
+use nix::{
+    sys::{wait::waitpid},
+    unistd::{execvp, fork, ForkResult},
+};
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Command {
     pub command: Vec<CString>,
@@ -68,10 +73,31 @@ pub fn parse(line: &str) -> Vec<Command> {
     return commands;
 }
 
+pub fn executeCommands(commands: &Vec<Command>) {
+    let forkResult : ForkResult = unsafe {
+        fork().unwrap()
+    };
+
+    match forkResult {
+        ForkResult::Child => {
+            let mut args: Vec<CString> = Vec::<CString>::new();
+            for i in 0..commands[0].command.len() {
+                args.push(CString::new(commands[0].command[i].clone()).unwrap());
+            }
+            execvp(&commands[0].command[0], args.as_slice()).unwrap();
+        },
+        ForkResult::Parent { child } => {
+            waitpid(child, None).unwrap();
+        },
+    }
+}
+
+
 pub fn main() -> Result<(), Box<dyn Error>> {
     for line in io::stdin().lock().lines() {
         let line = line?;
         let commands = parse(&line);
+        executeCommands(&commands);
     }
 
     Ok(())
