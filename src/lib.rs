@@ -19,8 +19,8 @@ pub struct Command {
 }
 
 pub fn scanWords(line: &str) -> Vec<String> {
-    let mut words: Vec<String> = Vec::<String>::new();
-    let mut word: String = String::new();
+    let mut words = Vec::<String>::new();
+    let mut word = String::new();
     for symb in line.chars() {
         if symb == '>' || symb == '<' || symb == '|' {
             if !word.is_empty() {
@@ -73,46 +73,51 @@ pub fn parse(line: &str) -> Vec<Command> {
         }
         i += 1;
     }
-    commands.push(command);
+    if !command.command.is_empty() {
+        commands.push(command);
+    }
     return commands;
 }
 
 pub fn executeCommands(commands: &Vec<Command>) {
-    let mut pipeline = Vec::<(Option<i32>, Option<i32>)>::with_capacity(commands.len());
+    if commands.is_empty() {
+        return;
+    }
+    let mut pipelines = Vec::<(Option<i32>, Option<i32>)>::with_capacity(commands.len());
     for i in 0..commands.len() {
-        pipeline.push((None, None));
+        pipelines.push((None, None));
     }
     for i in 0..commands.len() - 1 {
         let (inpipe, outpipe) = pipe().unwrap();
-        pipeline[i].1 = Option::Some(outpipe);
-        pipeline[i + 1].0 = Option::Some(inpipe);
+        pipelines[i].1 = Option::Some(outpipe);
+        pipelines[i + 1].0 = Option::Some(inpipe);
     }
 
     if commands.first().unwrap().stdin != None {
-        pipeline.first_mut().unwrap().0 = Option::Some(
+        unsafe { pipelines.first_mut().unwrap_unchecked() }.0 = Option::Some(
             open(
                 commands
                     .first()
                     .unwrap()
                     .stdin
-                    .clone()
+                    .as_ref()
                     .unwrap()
                     .to_str()
                     .unwrap(),
-                OFlag::O_CREAT | OFlag::O_WRONLY,
+                OFlag::O_RDONLY,
                 Mode::from_bits_truncate(0o777),
             )
             .unwrap(),
         );
     }
     if commands.last().unwrap().stdout != None {
-        pipeline.last_mut().unwrap().1 = Option::Some(
+        unsafe { pipelines.last_mut().unwrap_unchecked() }.1 = Option::Some(
             open(
                 commands
                     .last()
                     .unwrap()
                     .stdout
-                    .clone()
+                    .as_ref()
                     .unwrap()
                     .to_str()
                     .unwrap(),
@@ -125,49 +130,50 @@ pub fn executeCommands(commands: &Vec<Command>) {
 
     let mut forks = Vec::<ForkResult>::with_capacity(commands.len());
     for i in 0..commands.len() {
-        if forks.len() == 0 || forks.last().unwrap().is_parent() {
-            forks.push(unsafe { fork().unwrap() });
-            match forks[i] {
-                ForkResult::Child => {
-                    let mut args: Vec<CString> = Vec::<CString>::new();
-                    for j in 0..commands[i].command.len() {
-                        args.push(CString::new(commands[i].command[j].clone()).unwrap());
-                    }
-                    if pipeline[i].0 != None {
-                        dup2(pipeline[i].0.unwrap(), 0).unwrap();
-                    }
-                    if pipeline[i].1 != None {
-                        dup2(pipeline[i].1.unwrap(), 1).unwrap();
-                    }
-                    for j in 0..pipeline.len() {
-                        if pipeline[j].0 != None {
-                            close(pipeline[j].0.unwrap()).unwrap();
-                        }
-                        if pipeline[j].1 != None {
-                            close(pipeline[j].1.unwrap()).unwrap();
-                        }
-                    }
-                    execvp(&args[0], args.as_slice()).unwrap();
-                    break;
+        forks.push(unsafe { fork().unwrap() });
+        match forks[i] {
+            ForkResult::Child => {
+                let mut args = Vec::<CString>::with_capacity(commands[i].command.len());
+                for command in &commands[i].command {
+                    args.push(CString::new(command.clone()).unwrap());
                 }
-                ForkResult::Parent { child } => {}
+
+                if pipelines[i].0 != None {
+                    dup2(unsafe { pipelines[i].0.unwrap_unchecked() }, 0).unwrap();
+                }
+                if pipelines[i].1 != None {
+                    dup2(unsafe { pipelines[i].1.unwrap_unchecked() }, 1).unwrap();
+                }
+
+                for pipeline in &pipelines {
+                    if pipeline.0 != None {
+                        close(unsafe { pipeline.0.unwrap_unchecked() }).unwrap();
+                    }
+                    if pipeline.1 != None {
+                        close(unsafe { pipeline.1.unwrap_unchecked() }).unwrap();
+                    }
+                }
+
+                execvp(&args[0], args.as_slice()).unwrap();
             }
-        }
-    }
-    for j in 0..pipeline.len() {
-        if pipeline[j].0 != None {
-            close(pipeline[j].0.unwrap()).unwrap();
-        }
-        if pipeline[j].1 != None {
-            close(pipeline[j].1.unwrap()).unwrap();
+            ForkResult::Parent { child } => {}
         }
     }
 
-    for i in 0..forks.len() {
-        match forks[i] {
+    for pipeline in &pipelines {
+        if pipeline.0 != None {
+            close(unsafe { pipeline.0.unwrap_unchecked() }).unwrap();
+        }
+        if pipeline.1 != None {
+            close(unsafe { pipeline.1.unwrap_unchecked() }).unwrap();
+        }
+    }
+
+    for fork in &forks {
+        match fork {
             ForkResult::Child => {}
             ForkResult::Parent { child } => {
-                waitpid(child, None).unwrap();
+                waitpid(*child, None).unwrap();
             }
         }
     }
